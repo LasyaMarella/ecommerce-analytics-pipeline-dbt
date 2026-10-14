@@ -1,0 +1,319 @@
+version: 2
+
+models:
+  - name: fct_order_items
+    description: >
+      Fact table with one row per order line item (grain: order_item_id).
+      Money columns ending in _eur are in EUR, converted at the ECB rate for the order
+      date (weekend and holiday orders use the last published rate). Columns ending in
+      _local are in the customer's currency. "Gross" always means tax-inclusive and
+      "net" means excluding VAT. Net revenue (net_amount_eur) is after discounts.
+      Data-quality flags (is_*_missing, is_price_history_gap) mark lines whose figures
+      rely on a fallback, so they can be filtered or reported separately.
+    data_tests:
+      - dbt_utils.equal_rowcount:
+          name: same_rowcount_as_net_model
+          compare_model: ref('int_orders__order_items_net')
+      - dbt_utils.equality:
+          name: revenue_matches_net_model
+          compare_model: ref('int_orders__order_items_net')
+          compare_columns:
+            - order_item_id
+            - gross_amount_eur
+            - net_amount_eur
+
+    columns:
+      # ---- keys and dates ----
+      - name: order_item_id
+        description: "Primary key. One row per item line within an order."
+        data_tests:
+          - unique
+          - not_null
+
+      - name: order_id
+        description: "Order the line belongs to. An order can have several lines, so this is not unique."
+        data_tests:
+          - not_null
+
+      - name: product_id
+        description: "Product sold. Joins to dim_products, which includes inferred 'Unknown' members for products missing from the catalog."
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('dim_products')
+              field: product_id
+
+      - name: country_code
+        description: "Customer's country (DE, UK, CH or PL). Joins to dim_countries and drives which VAT rate applies."
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('dim_countries')
+              field: country_code
+
+      - name: currency_code
+        description: "Currency the customer paid in (EUR, GBP, CHF or PLN)."
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('dim_countries')
+              field: currency_code
+
+      - name: order_date
+        description: "Order date in UTC. Joins to dim_date and selects the exchange rate."
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('dim_date')
+              field: date_day
+
+      - name: ordered_at
+        description: "Exact UTC timestamp of the order. Used to find the listing price valid at that moment."
+
+      # ---- local-currency measures ----
+      - name: quantity
+        description: "Number of units on the line."
+        data_tests:
+          - not_null
+          - dbt_utils.expression_is_true:
+              expression: "> 0"
+
+      - name: unit_price_paid_local
+        description: "Price paid per unit in local currency, including VAT, before any basket discount."
+
+      - name: discount_amount_local
+        description: "Prorated basket-level discount for the line in local currency, tax-inclusive. NULL means no discount was recorded."
+
+      - name: gross_amount_local
+        description: "quantity x unit_price_paid_local. Line value in local currency, tax-inclusive, before discounts."
+
+      # ---- FX and VAT applied ----
+      - name: exchange_rate_applied
+        description: "Units of local currency per 1 EUR used for this line. Always 1.0 for EUR lines. NULL if a non-EUR line had no rate available (never defaulted to 1.0)."
+
+      - name: rate_source_date
+        description: "Date the ECB rate was actually published. Earlier than order_date when the rate was carried forward. NULL for EUR lines."
+
+      - name: is_rate_carried_forward
+        description: "True when the order date had no published rate (weekend or holiday) and the last published rate was used."
+
+      - name: vat_rate_applied
+        description: "VAT rate used for the line, as a fraction (0.19 = 19%). Taken from the rule valid on the order date. Set to 0 when no rule was found, so check is_vat_rate_missing."
+
+      - name: is_vat_rate_missing
+        description: "True when no VAT rule matched the country, category and order date (for example an unknown product or a category without rules). Net revenue for these lines equals discounted gross, so it may be overstated."
+
+      # ---- EUR measures: revenue ----
+      - name: gross_amount_eur
+        description: "gross_amount_local converted to EUR. Tax-inclusive and before discounts."
+        data_tests:
+          - not_null
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
+
+      - name: discount_amount_eur
+        description: "Basket discount in EUR, tax-inclusive. A missing discount counts as 0."
+
+      - name: discounted_gross_amount_eur
+        description: "gross_amount_eur minus discount_amount_eur. What the customer paid in EUR, including VAT."
+
+      - name: vat_amount_eur
+        description: "VAT contained in discounted_gross_amount_eur. net_amount_eur + vat_amount_eur = discounted_gross_amount_eur."
+
+      - name: net_amount_eur
+        description: "Net merchandise value (NMV): (gross - discount) / (1 + VAT rate), in EUR. The headline revenue measure for Berlin HQ reporting."
+        data_tests:
+          - not_null
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
+
+      # ---- EUR measures: pricing and margin ----
+      - name: recommended_retail_price_eur
+        description: "Recommended retail price per unit in EUR, tax-inclusive, from the listing version valid at order time. NULL when the product had no listing in that market."
+
+      - name: list_price_eur
+        description: "Storefront listing price per unit in EUR, tax-inclusive, from the listing version valid at order time. NULL when there is no listing."
+
+      - name: list_price_net_line_eur
+        description: "list_price_eur x quantity with VAT removed. The line's full-price value on the same ex-VAT basis as net_amount_eur."
+
+      - name: discount_depth_eur
+        description: "list_price_net_line_eur minus net_amount_eur. How far below list price the line actually sold, ex-VAT, covering both promo pricing and basket discounts. Negative if sold above list. NULL without a listing."
+
+      - name: markdown_per_unit_eur
+        description: "recommended_retail_price minus unit price paid, per unit in EUR, tax-inclusive. NULL without a listing."
+
+      - name: total_discount_given_eur
+        description: "markdown_per_unit_eur x quantity. Total markdown against recommended retail price for the line, tax-inclusive."
+
+      - name: margin_eur
+        description: "net_amount_eur minus quantity x base cost per unit. A missing base cost is treated as 0, so margin is overstated for lines where is_base_cost_missing is true."
+        data_tests:
+          - not_null
+
+      # ---- price version and flags ----
+      - name: listing_id
+        description: "Listing whose price version was used. NULL when the product had no listing in the customer's market."
+
+      - name: price_valid_from
+        description: "Start of the price version used. When is_price_history_gap is true this is later than ordered_at."
+
+      - name: is_listing_missing
+        description: "True when no listing exists for the product and market, so list-price and markdown columns are NULL."
+
+      - name: is_price_history_gap
+        description: "True when the order is older than the first recorded price version, so the earliest known version was used as an assumption."
+
+      - name: is_base_cost_missing
+        description: "True when the product has no base cost (or is not in the catalog), so margin_eur was computed with cost 0."
+
+      - name: price_type_flag
+        description: >
+          How the line was sold. 'Basket Discount' if any basket discount applies (takes precedence);
+          otherwise 'Promo Price' if the listing price was below the recommended retail price;
+          otherwise 'Full Price'. 'Unknown' when there is no listing and no basket discount.
+        data_tests:
+          - not_null
+          - accepted_values:
+              values: ['Basket Discount', 'Promo Price', 'Full Price', 'Unknown']
+
+  - name: dim_products
+    description: >
+      One row per product. Includes inferred members for product IDs that appear in
+      orders but not in the catalog, so revenue is never dropped by an inner join.
+    columns:
+      - name: product_id
+        description: "Primary key. Product SKU."
+        data_tests:
+          - unique
+          - not_null
+
+      - name: brand_name
+        description: "Brand of the product. 'Unknown' for inferred members."
+        data_tests:
+          - not_null
+
+      - name: category
+        description: "Lower-cased product category. Also the tax category used to find VAT rules. 'unknown' for inferred members."
+        data_tests:
+          - not_null
+
+      - name: base_cost_eur
+        description: "Supplier cost per unit in EUR. NULL when unknown."
+        data_tests:
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
+
+      - name: is_base_cost_missing
+        description: "True when base_cost_eur is NULL."
+
+      - name: has_vat_rules
+        description: "True when VAT rules exist for the product's category."
+        data_tests:
+          - not_null
+          - accepted_values:
+              values: [true]
+              quote: false
+              config:
+                severity: warn
+
+      - name: is_inferred_member
+        description: "True when the product appears in orders but not in the catalog, so this row was created automatically."
+        data_tests:
+          - not_null
+          - accepted_values:
+              values: [false]
+              quote: false
+              config:
+                severity: warn
+
+      - name: created_at
+        description: "When the product was created in the catalog. NULL for inferred members."
+
+      - name: updated_at
+        description: "When the product was last updated in the catalog. NULL for inferred members."
+
+  - name: dim_countries
+    description: "One row per market, from the ref_countries seed."
+    columns:
+      - name: country_code
+        description: "Primary key. Market code (DE, UK, CH, PL)."
+        data_tests:
+          - unique
+          - not_null
+
+      - name: country_name
+        description: "Full country name."
+
+      - name: currency_code
+        description: "Local currency of the market."
+        data_tests:
+          - not_null
+
+      - name: is_eurozone
+        description: "True when the market uses EUR."
+        data_tests:
+          - not_null
+
+      - name: has_vat_rules
+        description: "True when VAT rules exist for the market. A market without rules would break net revenue."
+        data_tests:
+          - not_null
+          - accepted_values:
+              values: [true]
+              quote: false
+
+  - name: dim_date
+    description: "One row per calendar date covered by the exchange-rate date spine, including weekends and holidays."
+    data_tests:
+      - dbt_utils.expression_is_true:
+          name: no_ecb_publication_on_weekends
+          expression: "not (is_weekend and is_ecb_publication_day)"
+
+    columns:
+      - name: date_day
+        description: "Primary key. Calendar date."
+        data_tests:
+          - unique
+          - not_null
+          - dbt_utils.sequential_values:
+              name: no_missing_calendar_days
+              interval: 1
+              datepart: day
+
+      - name: year
+        description: "Calendar year."
+
+      - name: quarter
+        description: "Calendar quarter (1 to 4)."
+
+      - name: month
+        description: "Month number (1 to 12)."
+
+      - name: month_name
+        description: "Abbreviated month name, for example Mar."
+
+      - name: year_month
+        description: "Year and month as YYYY-MM, for monthly grouping."
+
+      - name: iso_week
+        description: "ISO week number of the year."
+
+      - name: iso_day_of_week
+        description: "ISO day of week: 1 = Monday to 7 = Sunday."
+        data_tests:
+          - accepted_values:
+              values: [1, 2, 3, 4, 5, 6, 7]
+
+      - name: day_name
+        description: "Abbreviated day name, for example Fri."
+
+      - name: is_weekend
+        description: "True for Saturday and Sunday."
+        data_tests:
+          - not_null
+
+      - name: is_ecb_publication_day
+        description: "True when the ECB published an exchange rate on this date. False days use a carried-forward rate."
+        data_tests:
+          - not_null

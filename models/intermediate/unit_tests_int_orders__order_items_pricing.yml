@@ -1,0 +1,83 @@
+version: 2
+
+unit_tests:
+  - name: order_exactly_on_version_change_takes_new_version
+    description: Windows are [valid_from, valid_to). One second earlier still takes the old price.
+    model: int_orders__order_items_pricing
+    given:
+      - input: ref('int_orders__order_items_net')
+        rows:
+          - {order_item_id: OI1, product_id: P1, customer_country_code: CH, ordered_at: "2024-03-15 06:00:00+00:00", quantity: 1, unit_price_paid_local: 6.0, discount_amount_local: 0, exchange_rate_applied: 1.0, vat_rate_applied: 0, net_amount_eur: 6.0}
+          - {order_item_id: OI2, product_id: P1, customer_country_code: CH, ordered_at: "2024-03-15 05:59:59+00:00", quantity: 1, unit_price_paid_local: 8.0, discount_amount_local: 0, exchange_rate_applied: 1.0, vat_rate_applied: 0, net_amount_eur: 8.0}
+      - input: ref('stg_catalog__products')
+        rows:
+          - {product_id: P1, base_cost_eur: 2.0}
+      - input: ref('snap_listing_prices')
+        rows:
+          - {listing_id: L1, product_id: P1, country_code: CH, recommended_retail_price_local: 10.0, current_listing_price_local: 8.0, dbt_valid_from: "2024-02-01 06:00:00+00:00", dbt_valid_to: "2024-03-15 06:00:00+00:00"}
+          - {listing_id: L1, product_id: P1, country_code: CH, recommended_retail_price_local: 10.0, current_listing_price_local: 6.0, dbt_valid_from: "2024-03-15 06:00:00+00:00", dbt_valid_to: null}
+    expect:
+      rows:
+        - {order_item_id: OI1, list_price_eur: 6.0, is_price_history_gap: false, is_listing_missing: false}
+        - {order_item_id: OI2, list_price_eur: 8.0, is_price_history_gap: false, is_listing_missing: false}
+
+  - name: order_before_first_version_falls_back_and_is_flagged
+    description: The earliest recorded version is used and is_price_history_gap is true.
+    model: int_orders__order_items_pricing
+    given:
+      - input: ref('int_orders__order_items_net')
+        rows:
+          - {order_item_id: OI3, product_id: P1, customer_country_code: CH, ordered_at: "2024-03-05 12:00:00+00:00", quantity: 1, unit_price_paid_local: 8.0, discount_amount_local: 0, exchange_rate_applied: 1.0, vat_rate_applied: 0, net_amount_eur: 8.0}
+      - input: ref('stg_catalog__products')
+        rows:
+          - {product_id: P1, base_cost_eur: 2.0}
+      - input: ref('snap_listing_prices')
+        rows:
+          - {listing_id: L1, product_id: P1, country_code: CH, recommended_retail_price_local: 10.0, current_listing_price_local: 8.0, dbt_valid_from: "2024-03-10 06:00:00+00:00", dbt_valid_to: null}
+    expect:
+      rows:
+        - {order_item_id: OI3, listing_id: L1, list_price_eur: 8.0, is_price_history_gap: true, is_listing_missing: false}
+
+  - name: order_without_listing_keeps_line_with_null_prices_and_unknown_flag
+    description: No listing means NULL list prices and Unknown. A basket discount still wins.
+    model: int_orders__order_items_pricing
+    given:
+      - input: ref('int_orders__order_items_net')
+        rows:
+          - {order_item_id: OI4, product_id: P9, customer_country_code: CH, ordered_at: "2024-03-10 12:00:00+00:00", quantity: 1, unit_price_paid_local: 20.0, discount_amount_local: 0, exchange_rate_applied: 1.0, vat_rate_applied: 0, net_amount_eur: 20.0}
+          - {order_item_id: OI5, product_id: P9, customer_country_code: CH, ordered_at: "2024-03-10 12:00:00+00:00", quantity: 1, unit_price_paid_local: 20.0, discount_amount_local: 2.0, exchange_rate_applied: 1.0, vat_rate_applied: 0, net_amount_eur: 18.0}
+      - input: ref('stg_catalog__products')
+        rows:
+          - {product_id: P1, base_cost_eur: 2.0}
+      - input: ref('snap_listing_prices')
+        rows:
+          - {listing_id: L1, product_id: P1, country_code: CH, recommended_retail_price_local: 10.0, current_listing_price_local: 8.0, dbt_valid_from: "2024-02-01 06:00:00+00:00", dbt_valid_to: null}
+    expect:
+      rows:
+        - {order_item_id: OI4, listing_id: null, is_listing_missing: true, is_price_history_gap: false, list_price_eur: null, discount_depth_eur: null, markdown_per_unit_eur: null, price_type_flag: Unknown}
+        - {order_item_id: OI5, listing_id: null, is_listing_missing: true, is_price_history_gap: false, list_price_eur: null, discount_depth_eur: null, markdown_per_unit_eur: null, price_type_flag: Basket Discount}
+
+  - name: price_type_flag_precedence
+    description: Basket Discount beats Promo Price, which beats Full Price. NULL discount counts as none.
+    model: int_orders__order_items_pricing
+    given:
+      - input: ref('int_orders__order_items_net')
+        rows:
+          - {order_item_id: OIa, product_id: P1, customer_country_code: DE, ordered_at: "2024-03-10 12:00:00+00:00", quantity: 1, unit_price_paid_local: 80.0,  discount_amount_local: 5.0,  exchange_rate_applied: 1.0, vat_rate_applied: 0.19, net_amount_eur: 63.0}
+          - {order_item_id: OIb, product_id: P1, customer_country_code: DE, ordered_at: "2024-03-10 12:00:00+00:00", quantity: 1, unit_price_paid_local: 80.0,  discount_amount_local: 0,    exchange_rate_applied: 1.0, vat_rate_applied: 0.19, net_amount_eur: 67.0}
+          - {order_item_id: OIc, product_id: P1, customer_country_code: DE, ordered_at: "2024-03-10 12:00:00+00:00", quantity: 1, unit_price_paid_local: 80.0,  discount_amount_local: null, exchange_rate_applied: 1.0, vat_rate_applied: 0.19, net_amount_eur: 67.0}
+          - {order_item_id: OId, product_id: P2, customer_country_code: DE, ordered_at: "2024-03-10 12:00:00+00:00", quantity: 1, unit_price_paid_local: 100.0, discount_amount_local: 0,    exchange_rate_applied: 1.0, vat_rate_applied: 0.19, net_amount_eur: 84.0}
+      - input: ref('stg_catalog__products')
+        rows:
+          - {product_id: P1, base_cost_eur: 20.0}
+          - {product_id: P2, base_cost_eur: 30.0}
+      - input: ref('snap_listing_prices')
+        rows:
+          - {listing_id: L1, product_id: P1, country_code: DE, recommended_retail_price_local: 100.0, current_listing_price_local: 80.0,  dbt_valid_from: "2024-01-01 00:00:00+00:00", dbt_valid_to: null}
+          - {listing_id: L2, product_id: P2, country_code: DE, recommended_retail_price_local: 100.0, current_listing_price_local: 100.0, dbt_valid_from: "2024-01-01 00:00:00+00:00", dbt_valid_to: null}
+    expect:
+      rows:
+        - {order_item_id: OIa, price_type_flag: Basket Discount}
+        - {order_item_id: OIb, price_type_flag: Promo Price}
+        - {order_item_id: OIc, price_type_flag: Promo Price}
+        - {order_item_id: OId, price_type_flag: Full Price}

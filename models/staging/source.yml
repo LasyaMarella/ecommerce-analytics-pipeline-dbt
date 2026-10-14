@@ -1,0 +1,42 @@
+version: 2
+
+sources:
+  - name: raw_orders
+    description: "Kafka order event stream landing layer."
+    database: ECOMMERCE_DB
+    schema: RAW_ORDERS
+    tables:
+      - name: order_items
+        description: "One row per order line item."
+
+  - name: raw_catalog
+    description: "PostgreSQL CDC product catalog."
+    database: ECOMMERCE_DB
+    schema: RAW_CATALOG
+    tables:
+      - name: products
+        description: "One row per global SKU, with category and base cost."
+
+  - name: raw_pricing
+    description: "Listing price microservice replica (mutable, no history)."
+    database: ECOMMERCE_DB
+    schema: RAW_PRICING
+    tables:
+      - name: listing_prices
+        description: "Current and recommended retail price per product and country."
+
+  - name: raw_finance
+    description: "Daily ECB exchange rate pull."
+    database: ECOMMERCE_DB
+    schema: RAW_FINANCE
+    tables:
+      - name: exchange_rates
+        description: "Daily rate per currency relative to EUR, weekdays only."
+
+  - name: raw_tax
+    description: "Static ERP VAT rules seed."
+    database: ECOMMERCE_DB
+    schema: RAW_TAX
+    tables:
+      - name: vat_rules
+        description: "VAT rate per country and tax category, with validity windows."

@@ -1,0 +1,269 @@
+version: 2
+
+models:
+  - name: int_finance__exchange_rates_daily
+    description: >
+      Gapless daily EUR exchange rates per currency. Missing days are filled by
+      carrying forward the last published rate.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          name: one_rate_per_currency_and_day
+          combination_of_columns:
+            - rate_date
+            - currency_code
+      - dbt_utils.expression_is_true:
+          name: source_rate_date_not_after_rate_date
+          expression: "source_rate_date <= rate_date"
+
+    columns:
+      - name: rate_date
+        data_tests:
+          - not_null
+          - dbt_utils.sequential_values:
+              name: no_missing_dates_per_currency
+              interval: 1
+              datepart: day
+              group_by_columns: [currency_code]
+
+      - name: currency_code
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('stg_finance__exchange_rates')
+              field: target_currency_code
+
+      - name: exchange_rate
+        data_tests:
+          - not_null
+          - dbt_utils.expression_is_true:
+              expression: "> 0"
+
+      - name: source_rate_date
+        data_tests:
+          - not_null
+
+      - name: is_carried_forward
+        data_tests:
+          - not_null
+
+      - name: days_since_source_rate
+        description: Staleness of the rate in days. A long Easter weekend is about 4.
+        data_tests:
+          - not_null
+          - dbt_utils.expression_is_true:
+              name: staleness_not_negative
+              expression: ">= 0"
+          - dbt_utils.expression_is_true:
+              name: staleness_at_most_four_days
+              expression: "<= 4"
+              config:
+                severity: warn
+
+  - name: int_orders__order_items_eur
+    description: >
+      Order lines converted to EUR using the daily rate for the order date.
+      EUR lines use rate 1.0. Amounts are gross (tax-inclusive) and before discounts.
+    data_tests:
+      - dbt_utils.expression_is_true:
+          name: eur_lines_use_rate_one
+          expression: "currency_code <> 'EUR' or exchange_rate_applied = 1"
+      - dbt_utils.expression_is_true:
+          name: eur_amount_round_trips_to_local
+          expression: "abs(gross_amount_eur * exchange_rate_applied - gross_amount_local) < 0.01"
+      - dbt_utils.expression_is_true:
+          name: discount_not_above_gross_eur
+          expression: "discount_amount_eur <= gross_amount_eur"
+
+    columns:
+      - name: order_item_id
+        data_tests:
+          - unique
+          - not_null
+
+      - name: order_id
+        data_tests:
+          - not_null
+
+      - name: product_id
+        description: May not exist in the catalog (known orphans).
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('stg_catalog__products')
+              field: product_id
+              config:
+                severity: warn
+
+      - name: customer_country_code
+        data_tests:
+          - not_null
+
+      - name: currency_code
+        data_tests:
+          - not_null
+
+      - name: exchange_rate_applied
+        data_tests:
+          - not_null
+          - dbt_utils.expression_is_true:
+              expression: "> 0"
+
+      - name: is_rate_carried_forward
+        data_tests:
+          - not_null
+
+      - name: gross_amount_local
+        data_tests:
+          - not_null
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
+
+      - name: gross_amount_eur
+        data_tests:
+          - not_null
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
+
+      - name: discount_amount_eur
+        data_tests:
+          - not_null
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
+
+  - name: int_orders__order_items_net
+    description: >
+      Net revenue per order line. Net = (gross EUR - discount EUR) / (1 + VAT rate).
+      A missing VAT rule is treated as rate 0 and flagged.
+    data_tests:
+      - dbt_utils.expression_is_true:
+          name: net_plus_vat_equals_discounted_gross
+          expression: "abs(net_amount_eur + vat_amount_eur - discounted_gross_amount_eur) < 0.0002"
+      - dbt_utils.expression_is_true:
+          name: net_not_above_discounted_gross
+          expression: "net_amount_eur <= discounted_gross_amount_eur"
+      - dbt_utils.expression_is_true:
+          name: missing_vat_rule_uses_rate_zero
+          expression: "not is_vat_rate_missing or vat_rate_applied = 0"
+
+    columns:
+      - name: order_item_id
+        description: Fan-out guard. A duplicate here means overlapping VAT windows.
+        data_tests:
+          - unique
+          - not_null
+
+      - name: product_id
+        description: May not exist in the catalog (known orphans).
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('stg_catalog__products')
+              field: product_id
+              config:
+                severity: warn
+
+      - name: category
+        description: NULL for orphan products (known gap).
+        data_tests:
+          - not_null:
+              config:
+                severity: warn
+
+      - name: vat_rate_applied
+        data_tests:
+          - not_null
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
+
+      - name: is_vat_rate_missing
+        data_tests:
+          - not_null
+          - accepted_values:
+              values: [false]
+              quote: false
+              config:
+                severity: warn
+
+      - name: discounted_gross_amount_eur
+        data_tests:
+          - not_null
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
+
+      - name: net_amount_eur
+        data_tests:
+          - not_null
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
+
+      - name: vat_amount_eur
+        data_tests:
+          - not_null
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
+
+  - name: int_orders__order_items_pricing
+    description: >
+      Historical list price, discount depth, margin and price type per order line,
+      using the snapshot version valid at order time.
+    data_tests:
+      - dbt_utils.expression_is_true:
+          name: listing_missing_matches_null_listing_id
+          expression: "is_listing_missing = (listing_id is null)"
+      - dbt_utils.expression_is_true:
+          name: gap_and_missing_are_exclusive
+          expression: "not (is_listing_missing and is_price_history_gap)"
+      - dbt_utils.expression_is_true:
+          name: missing_listing_has_no_list_price
+          expression: "not is_listing_missing or list_price_eur is null"
+
+    columns:
+      - name: order_item_id
+        data_tests:
+          - unique
+          - not_null
+
+      - name: price_type_flag
+        data_tests:
+          - not_null
+          - accepted_values:
+              values: ['Basket Discount', 'Promo Price', 'Full Price', 'Unknown']
+
+      - name: margin_eur
+        description: Net amount minus quantity times base cost (NULL cost treated as 0).
+        data_tests:
+          - not_null
+
+      - name: is_base_cost_missing
+        description: True when margin was computed with no cost (known gap).
+        data_tests:
+          - not_null
+          - accepted_values:
+              values: [false]
+              quote: false
+              config:
+                severity: warn
+
+      - name: is_price_history_gap
+        description: True when the order predates the first recorded price version.
+        data_tests:
+          - not_null
+          - accepted_values:
+              values: [false]
+              quote: false
+              config:
+                severity: warn
+
+      - name: is_listing_missing
+        data_tests:
+          - not_null
+
+      - name: list_price_eur
+        data_tests:
+          - dbt_utils.expression_is_true:
+              expression: "> 0"
+
+      - name: recommended_retail_price_eur
+        data_tests:
+          - dbt_utils.expression_is_true:
+              expression: "> 0"

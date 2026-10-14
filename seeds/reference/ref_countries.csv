@@ -1,0 +1,5 @@
+country_code,country_name,currency_code,is_eurozone
+DE,Germany,EUR,true
+UK,United Kingdom,GBP,false
+CH,Switzerland,CHF,false
+PL,Poland,PLN,false

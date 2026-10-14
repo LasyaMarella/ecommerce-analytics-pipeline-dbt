@@ -1,0 +1,98 @@
+
+# Name your project! Project names should contain only lowercase characters
+# and underscores. A good package name should reflect your organization's
+# name or the intended use of these models
+name: 'ecommerce_project'
+version: '1.0.0'
+
+# This setting configures which "profile" dbt uses for this project.
+profile: 'ecommerce_project'
+
+# These configurations specify where dbt should look for different types of files.
+# The `model-paths` config, for example, states that models in this project can be
+# found in the "models/" directory. You probably won't need to change these!
+model-paths: ["models"]
+analysis-paths: ["analyses"]
+test-paths: ["tests"]
+seed-paths: ["seeds"]
+macro-paths: ["macros"]
+snapshot-paths: ["snapshots"]
+
+clean-targets:         # directories to be removed by `dbt clean`
+  - "target"
+  - "dbt_packages"
+
+
+# Configuring models
+# Full documentation: https://docs.getdbt.com/docs/configuring-models
+
+# In this example config, we tell dbt to build all models in the example/
+# directory as views. These settings can be overridden in the individual model
+# files using the `{{ config(...) }}` macro.
+models:
+  ecommerce_project:
+# Config applied to all files under models/staging/
+    staging:
+      +materialized: view
+      +schema: staging
+# Config applied to all files under models/intermediate/
+    intermediate:
+      +materialized: view
+      +schema: intermediate
+    marts:
+      +materialized: table
+      +schema: marts
+
+
+      
+seeds:
+  ecommerce_project:
+    raw_orders:
+      +schema: raw_orders
+      order_items:
+        +column_types:
+          order_item_id: varchar
+          order_id: varchar
+          product_id: varchar
+          customer_country_code: varchar
+          currency: varchar
+          quantity: integer
+          unit_price_paid: number(18,4)
+          discount_amount: number(18,4)
+          ordered_at: timestamp_tz
+    raw_catalog:
+      +schema: raw_catalog
+      products:
+        +column_types:
+          base_cost_eur: number(18,4)
+          created_at: timestamp_tz
+          updated_at: timestamp_tz
+    raw_pricing:
+      +schema: raw_pricing
+      listing_prices:
+        +column_types:
+          recommended_retail_price: number(18,4)
+          current_listing_price: number(18,4)
+          is_active: boolean
+          last_modified_at: timestamp_tz
+    raw_finance:
+      +schema: raw_finance
+      exchange_rates:
+        +column_types:
+          rate_date: date
+          exchange_rate: number(18,6)
+    raw_tax:
+      +schema: raw_tax
+      vat_rules:
+        +column_types:
+          vat_rate_pct: number(8,4)
+          valid_from: date
+          valid_to: date
+    reference:
+      +schema: reference
+      ref_countries:
+        +column_types:
+          country_code: varchar
+          country_name: varchar
+          currency_code: varchar
+          is_eurozone: boolean

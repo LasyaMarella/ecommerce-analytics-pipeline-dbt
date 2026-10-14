@@ -1,0 +1,45 @@
+version: 2
+
+unit_tests:
+  - name: vat_rate_switches_at_boundary_and_net_subtracts_discount
+    description: >
+      A CH books order on 03-14 gets the old rate and one on 03-15 gets the new rate.
+      Net = (gross - discount) / (1 + VAT).
+    model: int_orders__order_items_net
+    given:
+      - input: ref('int_orders__order_items_eur')
+        rows:
+          - {order_item_id: OI1, product_id: P1, customer_country_code: CH, ordered_date_utc: "2024-03-14", gross_amount_eur: 112.5, discount_amount_eur: 10.0}
+          - {order_item_id: OI2, product_id: P1, customer_country_code: CH, ordered_date_utc: "2024-03-15", gross_amount_eur: 112.6, discount_amount_eur: 10.0}
+      - input: ref('stg_catalog__products')
+        rows:
+          - {product_id: P1, category: books}
+      - input: ref('stg_tax__vat_rules')
+        rows:
+          - {country_code: CH, tax_category: books, vat_rate_pct: 0.0250, valid_from: "2018-01-01", valid_to: "2024-03-14"}
+          - {country_code: CH, tax_category: books, vat_rate_pct: 0.0260, valid_from: "2024-03-15", valid_to: null}
+    expect:
+      rows:
+        - {order_item_id: OI1, vat_rate_applied: 0.025, is_vat_rate_missing: false, discounted_gross_amount_eur: 102.5, net_amount_eur: 100.0, vat_amount_eur: 2.5}
+        - {order_item_id: OI2, vat_rate_applied: 0.026, is_vat_rate_missing: false, discounted_gross_amount_eur: 102.6, net_amount_eur: 100.0, vat_amount_eur: 2.6}
+
+  - name: missing_vat_rule_keeps_revenue_with_rate_zero
+    description: >
+      A category with no VAT rule (toys in PL) and an orphan product (no category) keep
+      their revenue, use rate 0, and are flagged.
+    model: int_orders__order_items_net
+    given:
+      - input: ref('int_orders__order_items_eur')
+        rows:
+          - {order_item_id: OI3, product_id: P2,   customer_country_code: PL, ordered_date_utc: "2024-03-10", gross_amount_eur: 123.0, discount_amount_eur: 23.0}
+          - {order_item_id: OI4, product_id: P999, customer_country_code: DE, ordered_date_utc: "2024-03-10", gross_amount_eur: 50.0,  discount_amount_eur: 0.0}
+      - input: ref('stg_catalog__products')
+        rows:
+          - {product_id: P2, category: toys}
+      - input: ref('stg_tax__vat_rules')
+        rows:
+          - {country_code: DE, tax_category: electronics, vat_rate_pct: 0.19, valid_from: "2020-01-01", valid_to: null}
+    expect:
+      rows:
+        - {order_item_id: OI3, vat_rate_applied: 0, is_vat_rate_missing: true, discounted_gross_amount_eur: 100.0, net_amount_eur: 100.0, vat_amount_eur: 0}
+        - {order_item_id: OI4, vat_rate_applied: 0, is_vat_rate_missing: true, discounted_gross_amount_eur: 50.0,  net_amount_eur: 50.0,  vat_amount_eur: 0}

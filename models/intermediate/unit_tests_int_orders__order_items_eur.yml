@@ -1,0 +1,50 @@
+version: 2
+
+unit_tests:
+  - name: eur_lines_use_rate_one_and_foreign_lines_are_converted
+    description: >
+      EUR lines have no rate row and default to 1.0. GBP lines divide by the rate and
+      carry the carried-forward flag from the date spine (Saturday order, Friday rate).
+    model: int_orders__order_items_eur
+    given:
+      - input: ref('stg_orders__order_items')
+        rows:
+          - {order_item_id: OI1, currency_code: EUR, customer_country_code: DE, quantity: 2, unit_price_paid_local: 10.00, discount_amount_local: 1.00, ordered_date_utc: "2024-03-09"}
+          - {order_item_id: OI2, currency_code: GBP, customer_country_code: UK, quantity: 2, unit_price_paid_local: 17.00, discount_amount_local: 3.40, ordered_date_utc: "2024-03-09"}
+      - input: ref('int_finance__exchange_rates_daily')
+        rows:
+          - {rate_date: "2024-03-09", currency_code: GBP, exchange_rate: 0.85, source_rate_date: "2024-03-08", is_carried_forward: true}
+    expect:
+      rows:
+        - {order_item_id: OI1, exchange_rate_applied: 1.0,  gross_amount_local: 20.00, gross_amount_eur: 20.0, discount_amount_eur: 1.0, is_rate_carried_forward: false, rate_source_date: null}
+        - {order_item_id: OI2, exchange_rate_applied: 0.85, gross_amount_local: 34.00, gross_amount_eur: 40.0, discount_amount_eur: 4.0, is_rate_carried_forward: true,  rate_source_date: "2024-03-08"}
+
+  - name: foreign_line_without_rate_stays_null_and_is_not_defaulted
+    description: A non-EUR line with no rate must not silently use 1.0.
+    model: int_orders__order_items_eur
+    given:
+      - input: ref('stg_orders__order_items')
+        rows:
+          - {order_item_id: OI3, currency_code: PLN, customer_country_code: PL, quantity: 1, unit_price_paid_local: 100.00, discount_amount_local: 5.00, ordered_date_utc: "2024-03-04"}
+      - input: ref('int_finance__exchange_rates_daily')
+        rows:
+          - {rate_date: "2024-03-04", currency_code: GBP, exchange_rate: 0.85, source_rate_date: "2024-03-04", is_carried_forward: false}
+    expect:
+      rows:
+        - {order_item_id: OI3, exchange_rate_applied: null, gross_amount_local: 100.00, gross_amount_eur: null, discount_amount_eur: null, is_rate_carried_forward: false}
+
+  - name: null_discount_is_treated_as_zero
+    description: A NULL discount must not null out the EUR discount amount.
+    model: int_orders__order_items_eur
+    given:
+      - input: ref('stg_orders__order_items')
+        rows:
+          - {order_item_id: OI4, currency_code: EUR, customer_country_code: DE, quantity: 1, unit_price_paid_local: 50.00, discount_amount_local: null, ordered_date_utc: "2024-03-04"}
+          - {order_item_id: OI5, currency_code: GBP, customer_country_code: UK, quantity: 1, unit_price_paid_local: 8.50, discount_amount_local: null, ordered_date_utc: "2024-03-04"}
+      - input: ref('int_finance__exchange_rates_daily')
+        rows:
+          - {rate_date: "2024-03-04", currency_code: GBP, exchange_rate: 0.85, source_rate_date: "2024-03-04", is_carried_forward: false}
+    expect:
+      rows:
+        - {order_item_id: OI4, gross_amount_eur: 50.0, discount_amount_eur: 0.0}
+        - {order_item_id: OI5, gross_amount_eur: 10.0, discount_amount_eur: 0.0}

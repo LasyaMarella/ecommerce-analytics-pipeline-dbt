@@ -1,0 +1,64 @@
+version: 2
+
+unit_tests:
+  - name: weekend_is_filled_and_monday_uses_its_own_rate
+    description: Friday's rate fills Saturday and Sunday; Monday's new rate is not overridden.
+    model: int_finance__exchange_rates_daily
+    given:
+      - input: ref('stg_finance__exchange_rates')
+        rows:
+          - {rate_date: "2024-03-08", target_currency_code: GBP, exchange_rate: 0.85}
+          - {rate_date: "2024-03-11", target_currency_code: GBP, exchange_rate: 0.90}
+      - input: ref('stg_orders__order_items')
+        rows:
+          - {ordered_date_utc: "2024-03-11"}
+    expect:
+      rows:
+        - {rate_date: "2024-03-08", currency_code: GBP, exchange_rate: 0.85, source_rate_date: "2024-03-08", is_carried_forward: false, days_since_source_rate: 0}
+        - {rate_date: "2024-03-09", currency_code: GBP, exchange_rate: 0.85, source_rate_date: "2024-03-08", is_carried_forward: true,  days_since_source_rate: 1}
+        - {rate_date: "2024-03-10", currency_code: GBP, exchange_rate: 0.85, source_rate_date: "2024-03-08", is_carried_forward: true,  days_since_source_rate: 2}
+        - {rate_date: "2024-03-11", currency_code: GBP, exchange_rate: 0.90, source_rate_date: "2024-03-11", is_carried_forward: false, days_since_source_rate: 0}
+
+  - name: midweek_gap_is_filled_per_currency
+    description: A missing Wednesday for GBP carries Tuesday's rate; PLN keeps its own Wednesday rate.
+    model: int_finance__exchange_rates_daily
+    given:
+      - input: ref('stg_finance__exchange_rates')
+        rows:
+          - {rate_date: "2024-03-04", target_currency_code: GBP, exchange_rate: 0.85}
+          - {rate_date: "2024-03-05", target_currency_code: GBP, exchange_rate: 0.86}
+          - {rate_date: "2024-03-07", target_currency_code: GBP, exchange_rate: 0.87}
+          - {rate_date: "2024-03-04", target_currency_code: PLN, exchange_rate: 4.0}
+          - {rate_date: "2024-03-05", target_currency_code: PLN, exchange_rate: 4.1}
+          - {rate_date: "2024-03-06", target_currency_code: PLN, exchange_rate: 4.2}
+          - {rate_date: "2024-03-07", target_currency_code: PLN, exchange_rate: 4.3}
+      - input: ref('stg_orders__order_items')
+        rows:
+          - {ordered_date_utc: "2024-03-07"}
+    expect:
+      rows:
+        - {rate_date: "2024-03-04", currency_code: GBP, exchange_rate: 0.85, source_rate_date: "2024-03-04", is_carried_forward: false, days_since_source_rate: 0}
+        - {rate_date: "2024-03-05", currency_code: GBP, exchange_rate: 0.86, source_rate_date: "2024-03-05", is_carried_forward: false, days_since_source_rate: 0}
+        - {rate_date: "2024-03-06", currency_code: GBP, exchange_rate: 0.86, source_rate_date: "2024-03-05", is_carried_forward: true,  days_since_source_rate: 1}
+        - {rate_date: "2024-03-07", currency_code: GBP, exchange_rate: 0.87, source_rate_date: "2024-03-07", is_carried_forward: false, days_since_source_rate: 0}
+        - {rate_date: "2024-03-04", currency_code: PLN, exchange_rate: 4.0,  source_rate_date: "2024-03-04", is_carried_forward: false, days_since_source_rate: 0}
+        - {rate_date: "2024-03-05", currency_code: PLN, exchange_rate: 4.1,  source_rate_date: "2024-03-05", is_carried_forward: false, days_since_source_rate: 0}
+        - {rate_date: "2024-03-06", currency_code: PLN, exchange_rate: 4.2,  source_rate_date: "2024-03-06", is_carried_forward: false, days_since_source_rate: 0}
+        - {rate_date: "2024-03-07", currency_code: PLN, exchange_rate: 4.3,  source_rate_date: "2024-03-07", is_carried_forward: false, days_since_source_rate: 0}
+
+  - name: spine_extends_to_last_order_date
+    description: Orders after the last published rate still get a carried-forward rate.
+    model: int_finance__exchange_rates_daily
+    given:
+      - input: ref('stg_finance__exchange_rates')
+        rows:
+          - {rate_date: "2024-03-01", target_currency_code: GBP, exchange_rate: 0.85}
+      - input: ref('stg_orders__order_items')
+        rows:
+          - {ordered_date_utc: "2024-03-04"}
+    expect:
+      rows:
+        - {rate_date: "2024-03-01", currency_code: GBP, exchange_rate: 0.85, source_rate_date: "2024-03-01", is_carried_forward: false, days_since_source_rate: 0}
+        - {rate_date: "2024-03-02", currency_code: GBP, exchange_rate: 0.85, source_rate_date: "2024-03-01", is_carried_forward: true,  days_since_source_rate: 1}
+        - {rate_date: "2024-03-03", currency_code: GBP, exchange_rate: 0.85, source_rate_date: "2024-03-01", is_carried_forward: true,  days_since_source_rate: 2}
+        - {rate_date: "2024-03-04", currency_code: GBP, exchange_rate: 0.85, source_rate_date: "2024-03-01", is_carried_forward: true,  days_since_source_rate: 3}

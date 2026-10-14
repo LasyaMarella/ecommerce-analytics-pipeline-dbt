@@ -1,0 +1,263 @@
+version: 2
+
+models:
+  - name: stg_orders__order_items
+    description: >
+      Cleaned order line items from the Kafka stream. One row per order line.
+      Amounts are in local currency and gross of tax.
+    data_tests:
+      - dbt_utils.expression_is_true:
+          name: discount_within_line_amount
+          expression: >
+            discount_amount_local is null
+            or (discount_amount_local >= 0
+                and discount_amount_local <= unit_price_paid_local * quantity)
+
+    columns:
+      - name: order_item_id
+        description: Primary key, one per order line.
+        data_tests:
+          - unique
+          - not_null
+
+      - name: order_id
+        data_tests:
+          - not_null
+
+      - name: product_id
+        description: May not exist in the catalog (known orphans).
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('stg_catalog__products')
+              field: product_id
+              config:
+                severity: warn
+
+      - name: customer_country_code
+        data_tests:
+          - not_null
+          - accepted_values:
+              values: ['DE', 'UK', 'CH', 'PL']
+
+      - name: currency_code
+        data_tests:
+          - not_null
+          - accepted_values:
+              values: ['EUR', 'GBP', 'CHF', 'PLN']
+
+      - name: quantity
+        data_tests:
+          - not_null
+          - dbt_utils.expression_is_true:
+              expression: "> 0"
+
+      - name: unit_price_paid_local
+        description: Gross price per unit in local currency.
+        data_tests:
+          - not_null
+          - dbt_utils.expression_is_true:
+              expression: "> 0"
+
+      - name: discount_amount_local
+        description: Prorated basket discount. NULL means no discount recorded.
+        data_tests:
+          - not_null:
+              config:
+                severity: warn
+
+      - name: ordered_at
+        data_tests:
+          - not_null
+
+      - name: ordered_date_utc
+        data_tests:
+          - not_null
+
+  - name: stg_catalog__products
+    description: >
+      Cleaned product catalog from PostgreSQL CDC. One row per global SKU.
+      Category is lower-cased and is the join key to VAT rules.
+    data_tests:
+      - dbt_utils.expression_is_true:
+          name: updated_at_not_before_created_at
+          expression: "updated_at >= created_at"
+
+    columns:
+      - name: product_id
+        description: Primary key.
+        data_tests:
+          - unique
+          - not_null
+
+      - name: brand_name
+        data_tests:
+          - not_null
+
+      - name: category
+        description: Lower-cased product category, mapped to tax_category in VAT rules.
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('stg_tax__vat_rules')
+              field: tax_category
+              config:
+                severity: warn
+
+      - name: base_cost_eur
+        description: Supplier cost in EUR. NULL when unknown (known gap).
+        data_tests:
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
+          - not_null:
+              config:
+                severity: warn
+
+      - name: created_at
+        data_tests:
+          - not_null
+
+      - name: updated_at
+        data_tests:
+          - not_null
+
+  - name: stg_pricing__listing_prices
+    description: >
+      Current listing prices from the pricing microservice replica. The source
+      overwrites in place, so history is preserved by the snapshot on this model.
+      Prices are in local currency, gross of tax.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          name: one_listing_per_product_and_country
+          combination_of_columns:
+            - product_id
+            - country_code
+      - dbt_utils.expression_is_true:
+          name: listing_price_not_above_rrp
+          expression: "current_listing_price_local <= recommended_retail_price_local"
+          config:
+            severity: warn
+
+    columns:
+      - name: listing_id
+        description: Primary key. Also the unique key for the SCD2 snapshot.
+        data_tests:
+          - unique
+          - not_null
+
+      - name: product_id
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('stg_catalog__products')
+              field: product_id
+
+      - name: country_code
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('stg_tax__vat_rules')
+              field: country_code
+
+      - name: currency_code
+        data_tests:
+          - not_null
+          - accepted_values:
+              values: ['EUR', 'GBP', 'CHF', 'PLN']
+
+      - name: recommended_retail_price_local
+        description: Original MSRP in local currency, gross of tax.
+        data_tests:
+          - not_null
+          - dbt_utils.expression_is_true:
+              expression: "> 0"
+
+      - name: current_listing_price_local
+        description: Active selling price in local currency, gross of tax.
+        data_tests:
+          - not_null
+          - dbt_utils.expression_is_true:
+              expression: "> 0"
+
+      - name: is_active
+        data_tests:
+          - not_null
+
+      - name: last_modified_at
+        description: Used as the updated_at timestamp for the snapshot.
+        data_tests:
+          - not_null
+
+  - name: stg_finance__exchange_rates
+    description: >
+      Daily ECB reference rates. Rate is units of target currency per 1 EUR.
+      Weekdays only, with no EUR rows. Missing dates are expected and are
+      filled in the intermediate date spine.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          name: one_rate_per_currency_and_day
+          combination_of_columns:
+            - rate_date
+            - target_currency_code
+
+    columns:
+      - name: rate_date
+        data_tests:
+          - not_null
+
+      - name: source_currency_code
+        data_tests:
+          - not_null
+          - accepted_values:
+              values: ['EUR']
+
+      - name: target_currency_code
+        data_tests:
+          - not_null
+          - accepted_values:
+              values: ['GBP', 'CHF', 'PLN']
+
+      - name: exchange_rate
+        description: Units of target currency per 1 EUR.
+        data_tests:
+          - not_null
+          - dbt_utils.expression_is_true:
+              expression: "> 0"
+
+  - name: stg_tax__vat_rules
+    description: >
+      VAT rate per country and tax category, with validity windows. valid_to is
+      NULL while the rule is active. Both bounds are inclusive dates.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          name: one_rule_per_country_category_and_start_date
+          combination_of_columns:
+            - country_code
+            - tax_category
+            - valid_from
+      - dbt_utils.expression_is_true:
+          name: valid_to_not_before_valid_from
+          expression: "valid_to is null or valid_to >= valid_from"
+
+    columns:
+      - name: country_code
+        description: Master list of markets. Other models test against this column.
+        data_tests:
+          - not_null
+
+      - name: tax_category
+        description: Lower-cased category, matches products.category.
+        data_tests:
+          - not_null
+
+      - name: vat_rate_pct
+        description: Rate as a fraction, e.g. 0.19 for 19%.
+        data_tests:
+          - not_null
+
+      - name: valid_from
+        data_tests:
+          - not_null
+
+      - name: valid_to
+        description: Last valid day, inclusive. NULL means the rule is still active.

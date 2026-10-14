@@ -1,0 +1,32 @@
+version: 2
+
+snapshots:
+  - name: snap_listing_prices
+    description: SCD Type 2 history of listing prices, built from the staging view.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          name: one_row_per_listing_and_version
+          combination_of_columns:
+            - listing_id
+            - dbt_valid_from
+
+    columns:
+      - name: listing_id
+        data_tests:
+          - not_null
+
+      - name: product_id
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('stg_catalog__products')
+              field: product_id
+
+      - name: dbt_scd_id
+        data_tests:
+          - unique
+          - not_null
+
+      - name: dbt_valid_from
+        data_tests:
+          - not_null
