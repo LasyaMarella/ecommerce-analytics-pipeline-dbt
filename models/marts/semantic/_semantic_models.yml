@@ -1,0 +1,97 @@
+version: 2
+
+semantic_models:
+  - name: order_items
+    description: "One row per order line. Source of all revenue, discount and margin measures, in EUR."
+    model: ref('fct_order_items')
+    defaults:
+      agg_time_dimension: order_date
+
+    entities:
+      - name: order_item
+        type: primary
+        expr: order_item_id
+      - name: sales_order
+        type: foreign
+        expr: order_id
+      - name: product
+        type: foreign
+        expr: product_id
+      - name: country
+        type: foreign
+        expr: country_code
+
+    dimensions:
+      - name: order_date
+        type: time
+        type_params:
+          time_granularity: day
+      - name: price_type_flag
+        type: categorical
+        description: "Basket Discount, Promo Price, Full Price or Unknown."
+      - name: currency_code
+        type: categorical
+        description: "Currency the customer paid in."
+      - name: is_vat_rate_missing
+        type: categorical
+        description: "True when no VAT rule matched the line."
+      - name: is_price_history_gap
+        type: categorical
+        description: "True when the order predates the first recorded price version."
+      - name: is_base_cost_missing
+        type: categorical
+        description: "True when no base cost was known, so margin equals full net revenue."
+
+    measures:
+      - name: gross_amount_eur
+        description: "Line value in EUR, tax-inclusive, before discounts."
+        agg: sum
+      - name: net_amount_eur
+        description: "Net merchandise value in EUR, ex-VAT and after discounts."
+        agg: sum
+      - name: discount_amount_eur
+        description: "Basket discounts in EUR, tax-inclusive."
+        agg: sum
+      - name: vat_amount_eur
+        description: "VAT contained in what customers paid, in EUR."
+        agg: sum
+      - name: margin_eur
+        description: "Net amount minus quantity times base cost, in EUR."
+        agg: sum
+      - name: units
+        description: "Units sold."
+        agg: sum
+        expr: quantity
+      - name: order_count
+        description: "Distinct orders."
+        agg: count_distinct
+        expr: order_id
+
+  - name: products
+    description: "Product attributes for slicing order metrics."
+    model: ref('dim_products')
+    entities:
+      - name: product
+        type: primary
+        expr: product_id
+    dimensions:
+      - name: category
+        type: categorical
+      - name: brand_name
+        type: categorical
+      - name: is_inferred_member
+        type: categorical
+        description: "True for products missing from the catalog."
+
+  - name: countries
+    description: "Market attributes for slicing order metrics."
+    model: ref('dim_countries')
+    entities:
+      - name: country
+        type: primary
+        expr: country_code
+    dimensions:
+      - name: country_name
+        type: categorical
+      - name: is_eurozone
+        type: categorical

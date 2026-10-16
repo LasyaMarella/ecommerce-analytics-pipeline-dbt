@@ -1,0 +1,79 @@
+version: 2
+
+metrics:
+  - name: gross_revenue
+    label: "Gross revenue (EUR)"
+    description: "Line value in EUR, tax-inclusive, before discounts."
+    type: simple
+    type_params:
+      measure: gross_amount_eur
+
+  - name: net_revenue
+    label: "Net revenue (EUR)"
+    description: "Net merchandise value (NMV) in EUR: ex-VAT and after discounts. The headline revenue figure for HQ reporting."
+    type: simple
+    type_params:
+      measure: net_amount_eur
+
+  - name: total_discounts
+    label: "Total discounts (EUR)"
+    description: "Basket discounts in EUR, tax-inclusive."
+    type: simple
+    type_params:
+      measure: discount_amount_eur
+
+  - name: vat_collected
+    label: "VAT (EUR)"
+    description: "VAT included in customer payments, in EUR."
+    type: simple
+    type_params:
+      measure: vat_amount_eur
+
+  - name: margin
+    label: "Margin (EUR)"
+    description: "Net revenue minus product cost. Overstated for lines with no known cost; see margin_pct."
+    type: simple
+    type_params:
+      measure: margin_eur
+
+  - name: units_sold
+    label: "Units sold"
+    description: "Total units across all order lines."
+    type: simple
+    type_params:
+      measure: units
+
+  - name: total_orders
+    label: "Orders"
+    description: "Distinct orders."
+    type: simple
+    type_params:
+      measure: order_count
+
+  - name: average_order_value
+    label: "Average order value (EUR)"
+    description: "Net revenue divided by distinct orders."
+    type: ratio
+    type_params:
+      numerator: net_revenue
+      denominator: total_orders
+
+  - name: discount_rate
+    label: "Discount rate"
+    description: "Basket discounts as a share of gross revenue."
+    type: ratio
+    type_params:
+      numerator: total_discounts
+      denominator: gross_revenue
+
+  - name: margin_pct
+    label: "Margin % (known-cost lines only)"
+    description: "Margin divided by net revenue, counting only lines with a known base cost. Lines with no cost are excluded from both sides, since their margin would equal full revenue."
+    type: ratio
+    type_params:
+      numerator:
+        name: margin
+        filter: "{{ Dimension('order_item__is_base_cost_missing') }} = false"
+      denominator:
+        name: net_revenue
+        filter: "{{ Dimension('order_item__is_base_cost_missing') }} = false"
