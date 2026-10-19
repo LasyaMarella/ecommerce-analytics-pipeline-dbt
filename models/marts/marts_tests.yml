@@ -317,3 +317,85 @@ models:
         description: "True when the ECB published an exchange rate on this date. False days use a carried-forward rate."
         data_tests:
           - not_null
+
+  - name: rpt_order_items
+    description: >
+      Flat reporting table for BI tools, one row per order line. fct_order_items joined to
+      the product, country and date dimensions, so dashboards need no joins. Amounts ending
+      in _eur are in EUR; net_amount_eur is ex-VAT and after discounts. Uses left joins only,
+      so no revenue is dropped. The _known_cost columns exclude lines with no base cost, for
+      margin percentages.
+    data_tests:
+      - dbt_utils.equal_rowcount:
+          name: same_rowcount_as_fact
+          compare_model: ref('fct_order_items')
+      - dbt_utils.equality:
+          name: revenue_matches_fact
+          compare_model: ref('fct_order_items')
+          compare_columns:
+            - order_item_id
+            - gross_amount_eur
+            - net_amount_eur
+            - margin_eur
+
+    columns:
+      - name: order_item_id
+        description: "Primary key, one per order line."
+        data_tests:
+          - unique
+          - not_null
+
+      - name: order_id
+        description: "Order the line belongs to. Not unique."
+
+      - name: order_date
+        description: "Order date in UTC."
+        data_tests:
+          - not_null
+
+      - name: order_year_month
+        description: "Year and month as YYYY-MM, for monthly grouping."
+        data_tests:
+          - not_null
+
+      - name: country_code
+        description: "Customer's country code (DE, UK, CH, PL)."
+
+      - name: country_name
+        description: "Customer's country name."
+        data_tests:
+          - not_null
+
+      - name: currency_code
+        description: "Currency the customer paid in."
+
+      - name: product_category
+        description: "Product category. 'unknown' for products missing from the catalog."
+        data_tests:
+          - not_null
+
+      - name: is_unknown_product
+        description: "True when the product is not in the catalog."
+
+      - name: gross_amount_eur
+        description: "Line value in EUR, tax-inclusive, before discounts."
+
+      - name: net_amount_eur
+        description: "Net revenue in EUR: ex-VAT and after discounts. The headline revenue figure."
+        data_tests:
+          - not_null
+
+      - name: margin_eur
+        description: "Net amount minus quantity times base cost, in EUR. Overstated when is_base_cost_missing is true."
+
+      - name: margin_eur_known_cost
+        description: "margin_eur for lines with a known base cost, otherwise NULL."
+
+      - name: net_amount_eur_known_cost
+        description: "net_amount_eur for lines with a known base cost, otherwise NULL. Divide margin_eur_known_cost by this for margin %."
+
+      - name: price_type_flag
+        description: "Basket Discount, Promo Price, Full Price or Unknown."
+        data_tests:
+          - accepted_values:
+              values: ['Basket Discount', 'Promo Price', 'Full Price', 'Unknown']
