@@ -26,6 +26,41 @@ docker compose up -d
 Open http://localhost:3000, complete the setup wizard, then add a Snowflake database with
 `BI_USER` / role `BI_READER` / warehouse `COMPUTE_WH` / database `ECOMMERCE_DB` / schema `MARTS`.
 
+## Sync dbt documentation to Metabase
+
+Column descriptions, friendly names and semantic types are defined **in dbt** (`models/marts/marts_tests.yml`, under `meta`) and pushed to Metabase with [`dbt-metabase`](https://github.com/gouline/dbt-metabase). The data dictionary therefore lives in Git, and Metabase can be rebuilt from it.
+
+| dbt `meta` key | What it sets in Metabase |
+|---|---|
+| `metabase.display_name` | friendly table or column name |
+| `metabase.semantic_type` | field type (PK, Category, Currency, Quantity, Percentage) |
+| `metabase.points_of_interest`, `metabase.caveats` | notes shown in the table information panel |
+
+Descriptions come from the dbt `description` fields.
+
+**One-time setup.** Use a separate virtual environment so it cannot disturb the pinned dbt versions:
+
+```powershell
+python -m venv venvs\dbt-metabase
+.\venvs\dbt-metabase\Scripts\Activate.ps1
+pip install dbt-metabase==1.6.1
+```
+
+**Each time the dbt docs or `meta` change:**
+
+```powershell
+# in the project's dbt environment
+dbt parse
+
+# in the dbt-metabase environment (credentials stay in this terminal session only)
+$env:METABASE_USERNAME = "<metabase login email>"
+$secure = Read-Host "Metabase password" -AsSecureString
+$env:METABASE_PASSWORD = [System.Net.NetworkCredential]::new("", $secure).Password
+.\bi\sync_metabase.ps1
+```
+
+The sync is idempotent, so it is safe to re-run. Currency formatting (the Euro symbol) is a Metabase display setting that is configured in the Metabase UI and is not managed by dbt.
+
 ## Dashboards
 
 | Dashboard | Audience | Content |
