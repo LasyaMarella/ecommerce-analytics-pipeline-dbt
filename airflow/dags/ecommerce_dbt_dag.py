@@ -60,7 +60,6 @@ with DAG(
     dbt_deps = dbt_task("dbt_deps", "deps")
     dbt_run_staging = dbt_task("dbt_run_staging", "run --select staging")
     # The snapshot reads a staging view and feeds the pricing model,
-    # so it must sit between staging and intermediate.
     dbt_snapshot = dbt_task("dbt_snapshot", "snapshot")
     dbt_run_intermediate = dbt_task("dbt_run_intermediate", "run --select intermediate")
     dbt_run_marts = dbt_task("dbt_run_marts", "run --select marts")
