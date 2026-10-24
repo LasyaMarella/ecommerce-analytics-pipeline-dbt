@@ -317,3 +317,115 @@ models:
         description: "True when the ECB published an exchange rate on this date. False days use a carried-forward rate."
         data_tests:
           - not_null
+
+  - name: rpt_order_items
+    description: >
+      Flat reporting table for BI tools, one row per order line. fct_order_items joined to
+      the product, country and date dimensions, so dashboards need no joins. Amounts ending
+      in _eur are in EUR; net_amount_eur is ex-VAT and after discounts. Uses left joins only,
+      so no revenue is dropped. The _known_cost columns exclude lines with no base cost, for
+      margin percentages.
+    meta:
+      metabase.display_name: Order Items
+      metabase.points_of_interest: "One row per order line. net_amount_eur is ex-VAT and after discounts, in EUR."
+      metabase.caveats: "Lines without a known product cost count margin at full revenue. For margin percentages use margin_eur_known_cost and net_amount_eur_known_cost."
+    data_tests:
+      - dbt_utils.equal_rowcount:
+          name: same_rowcount_as_fact
+          compare_model: ref('fct_order_items')
+      - dbt_utils.equality:
+          name: revenue_matches_fact
+          compare_model: ref('fct_order_items')
+          compare_columns:
+            - order_item_id
+            - gross_amount_eur
+            - net_amount_eur
+            - margin_eur
+
+    columns:
+      # ---- keys and date ----
+      - name: order_item_id
+        description: "Primary key, one per order line."
+        meta: {metabase.semantic_type: type/PK, metabase.display_name: "Order item ID"}
+        data_tests:
+          - unique
+          - not_null
+      - {name: order_id, description: "Order the line belongs to. Not unique, since an order can have several lines.", meta: {metabase.display_name: "Order ID"}}
+      - name: order_date
+        description: "Order date in UTC."
+        meta: {metabase.display_name: "Order date"}
+        data_tests:
+          - not_null
+      - {name: order_year, description: "Calendar year of the order.", meta: {metabase.semantic_type: type/Category, metabase.display_name: Year}}
+      - {name: order_quarter, description: "Calendar quarter of the order (1 to 4).", meta: {metabase.semantic_type: type/Category, metabase.display_name: Quarter}}
+      - {name: order_month, description: "Month number of the order (1 to 12).", meta: {metabase.semantic_type: type/Category, metabase.display_name: "Month number"}}
+      - {name: order_month_name, description: "Abbreviated month name of the order.", meta: {metabase.semantic_type: type/Category, metabase.display_name: Month}}
+      - name: order_year_month
+        description: "Year and month as YYYY-MM, for monthly grouping."
+        meta: {metabase.semantic_type: type/Category, metabase.display_name: "Year-month"}
+        data_tests:
+          - not_null
+      - {name: order_iso_week, description: "ISO week number of the order.", meta: {metabase.semantic_type: type/Category, metabase.display_name: "ISO week"}}
+      - {name: order_day_name, description: "Abbreviated weekday name of the order.", meta: {metabase.semantic_type: type/Category, metabase.display_name: Weekday}}
+      - {name: is_weekend_order, description: "True when the order was placed on a Saturday or Sunday.", meta: {metabase.display_name: "Weekend order"}}
+      - {name: is_ecb_publication_day, description: "True when the ECB published an exchange rate on the order date.", meta: {metabase.display_name: "ECB rate published that day"}}
+
+      # ---- market ----
+      - {name: country_code, description: "Customer's country code (DE, UK, CH, PL).", meta: {metabase.semantic_type: type/Category, metabase.display_name: "Country code"}}
+      - name: country_name
+        description: "Customer's country name."
+        meta: {metabase.semantic_type: type/Category, metabase.display_name: Country}
+        data_tests:
+          - not_null
+      - {name: is_eurozone, description: "True when the market uses EUR.", meta: {metabase.display_name: "Eurozone market"}}
+      - {name: currency_code, description: "Currency the customer paid in.", meta: {metabase.semantic_type: type/Category, metabase.display_name: "Order currency"}}
+
+      # ---- product ----
+      - {name: product_id, description: "Product sold.", meta: {metabase.display_name: "Product ID"}}
+      - {name: brand_name, description: "Brand of the product. 'Unknown' for products missing from the catalog.", meta: {metabase.semantic_type: type/Category, metabase.display_name: Brand}}
+      - name: product_category
+        description: "Product category. 'unknown' for products missing from the catalog."
+        meta: {metabase.semantic_type: type/Category, metabase.display_name: "Product category"}
+        data_tests:
+          - not_null
+      - {name: is_unknown_product, description: "True when the product is not in the catalog.", meta: {metabase.display_name: "Unknown product"}}
+
+      # ---- local-currency measures ----
+      - {name: quantity, description: "Units on the line.", meta: {metabase.semantic_type: type/Quantity, metabase.display_name: Units}}
+      - {name: unit_price_paid_local, description: "Price paid per unit in local currency, tax-inclusive, before discounts.", meta: {metabase.display_name: "Unit price paid (local currency)"}}
+      - {name: discount_amount_local, description: "Basket discount in local currency, tax-inclusive. NULL means none recorded.", meta: {metabase.display_name: "Discount (local currency)"}}
+      - {name: gross_amount_local, description: "quantity x unit price paid, in local currency, tax-inclusive, before discounts.", meta: {metabase.display_name: "Gross amount (local currency)"}}
+
+      # ---- FX and VAT ----
+      - {name: exchange_rate_applied, description: "Units of local currency per 1 EUR used for the line. 1.0 for EUR lines.", meta: {metabase.display_name: "Exchange rate applied"}}
+      - {name: is_rate_carried_forward, description: "True when the order date had no published rate and the last published rate was used.", meta: {metabase.display_name: "FX rate carried forward"}}
+      - {name: vat_rate_applied, description: "VAT rate used for the line, as a fraction. 0 when no rule matched.", meta: {metabase.semantic_type: type/Percentage, metabase.display_name: "VAT rate"}}
+      - {name: is_vat_rate_missing, description: "True when no VAT rule matched. Net revenue then equals the discounted gross.", meta: {metabase.display_name: "VAT rule missing"}}
+
+      # ---- EUR measures ----
+      - {name: gross_amount_eur, description: "Line value in EUR, tax-inclusive, before discounts.", meta: {metabase.semantic_type: type/Currency, metabase.display_name: "Gross amount (EUR)"}}
+      - {name: discount_amount_eur, description: "Basket discount in EUR, tax-inclusive. A missing discount counts as 0.", meta: {metabase.semantic_type: type/Currency, metabase.display_name: "Discount (EUR)"}}
+      - {name: discounted_gross_amount_eur, description: "Gross minus discount in EUR, tax-inclusive. What the customer paid.", meta: {metabase.semantic_type: type/Currency, metabase.display_name: "Paid by customer (EUR)"}}
+      - {name: vat_amount_eur, description: "VAT contained in what the customer paid, in EUR.", meta: {metabase.semantic_type: type/Currency, metabase.display_name: "VAT (EUR)"}}
+      - name: net_amount_eur
+        description: "Net revenue in EUR: ex-VAT and after discounts. The headline revenue figure."
+        meta: {metabase.semantic_type: type/Currency, metabase.display_name: "Net revenue (EUR)"}
+        data_tests:
+          - not_null
+      - {name: list_price_net_line_eur, description: "List price x quantity with VAT removed, in EUR. The line's full-price value, ex-VAT.", meta: {metabase.semantic_type: type/Currency, metabase.display_name: "List value, ex-VAT (EUR)"}}
+      - {name: discount_depth_eur, description: "List value ex-VAT minus net revenue, in EUR. Negative if sold above list. NULL without a listing.", meta: {metabase.semantic_type: type/Currency, metabase.display_name: "Discount depth (EUR)"}}
+      - {name: total_discount_given_eur, description: "Markdown against recommended retail price for the line, in EUR, tax-inclusive. NULL without a listing.", meta: {metabase.semantic_type: type/Currency, metabase.display_name: "Markdown vs RRP (EUR)"}}
+      - {name: margin_eur, description: "Net revenue minus quantity x base cost, in EUR. Overstated when the base cost is missing.", meta: {metabase.semantic_type: type/Currency, metabase.display_name: "Margin (EUR)"}}
+      - {name: margin_eur_known_cost, description: "margin_eur for lines with a known base cost, otherwise NULL.", meta: {metabase.semantic_type: type/Currency, metabase.display_name: "Margin, known cost (EUR)"}}
+      - {name: net_amount_eur_known_cost, description: "Net revenue for lines with a known base cost, otherwise NULL. Divide margin_eur_known_cost by this for margin %.", meta: {metabase.semantic_type: type/Currency, metabase.display_name: "Net revenue, known cost (EUR)"}}
+
+      # ---- pricing context and data-quality flags ----
+      - name: price_type_flag
+        description: "Basket Discount, Promo Price, Full Price or Unknown."
+        meta: {metabase.semantic_type: type/Category, metabase.display_name: "Price type"}
+        data_tests:
+          - accepted_values:
+              values: ['Basket Discount', 'Promo Price', 'Full Price', 'Unknown']
+      - {name: is_listing_missing, description: "True when no listing exists for the product and market.", meta: {metabase.display_name: "No listing"}}
+      - {name: is_price_history_gap, description: "True when the order predates the first recorded price version.", meta: {metabase.display_name: "Price history gap"}}
+      - {name: is_base_cost_missing, description: "True when the product has no known base cost.", meta: {metabase.display_name: "Base cost missing"}}

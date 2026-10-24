@@ -15,17 +15,18 @@ models:
 
     columns:
       - name: order_item_id
-        description: Primary key, one per order line.
+        description: "Primary key, one per order line."
         data_tests:
           - unique
           - not_null
 
       - name: order_id
+        description: "Order the line belongs to. Not unique, since an order can have several lines."
         data_tests:
           - not_null
 
       - name: product_id
-        description: May not exist in the catalog (known orphans).
+        description: "Product sold. May not exist in the catalog (known orphans)."
         data_tests:
           - not_null
           - relationships:
@@ -35,42 +36,47 @@ models:
                 severity: warn
 
       - name: customer_country_code
+        description: "Customer's country code, upper-cased (DE, UK, CH or PL)."
         data_tests:
           - not_null
           - accepted_values:
               values: ['DE', 'UK', 'CH', 'PL']
 
       - name: currency_code
+        description: "Currency the customer paid in, upper-cased (EUR, GBP, CHF or PLN)."
         data_tests:
           - not_null
           - accepted_values:
               values: ['EUR', 'GBP', 'CHF', 'PLN']
 
       - name: quantity
+        description: "Number of units on the line."
         data_tests:
           - not_null
           - dbt_utils.expression_is_true:
               expression: "> 0"
 
       - name: unit_price_paid_local
-        description: Gross price per unit in local currency.
+        description: "Gross price per unit in local currency, including tax."
         data_tests:
           - not_null
           - dbt_utils.expression_is_true:
               expression: "> 0"
 
       - name: discount_amount_local
-        description: Prorated basket discount. NULL means no discount recorded.
+        description: "Prorated basket discount in local currency, tax-inclusive. NULL means no discount recorded."
         data_tests:
           - not_null:
               config:
                 severity: warn
 
       - name: ordered_at
+        description: "Exact UTC timestamp of the order."
         data_tests:
           - not_null
 
       - name: ordered_date_utc
+        description: "UTC date of the order. Join key to exchange rates."
         data_tests:
           - not_null
 
@@ -85,17 +91,18 @@ models:
 
     columns:
       - name: product_id
-        description: Primary key.
+        description: "Primary key. Global SKU."
         data_tests:
           - unique
           - not_null
 
       - name: brand_name
+        description: "Brand of the product."
         data_tests:
           - not_null
 
       - name: category
-        description: Lower-cased product category, mapped to tax_category in VAT rules.
+        description: "Lower-cased product category, mapped to tax_category in VAT rules."
         data_tests:
           - not_null
           - relationships:
@@ -105,7 +112,7 @@ models:
                 severity: warn
 
       - name: base_cost_eur
-        description: Supplier cost in EUR. NULL when unknown (known gap).
+        description: "Supplier cost per unit in EUR. NULL when unknown (known gap)."
         data_tests:
           - dbt_utils.expression_is_true:
               expression: ">= 0"
@@ -114,10 +121,12 @@ models:
                 severity: warn
 
       - name: created_at
+        description: "When the product was created in the catalog."
         data_tests:
           - not_null
 
       - name: updated_at
+        description: "When the product was last updated in the catalog."
         data_tests:
           - not_null
 
@@ -140,12 +149,13 @@ models:
 
     columns:
       - name: listing_id
-        description: Primary key. Also the unique key for the SCD2 snapshot.
+        description: "Primary key. Also the unique key for the SCD2 snapshot."
         data_tests:
           - unique
           - not_null
 
       - name: product_id
+        description: "Product the listing is for."
         data_tests:
           - not_null
           - relationships:
@@ -153,6 +163,7 @@ models:
               field: product_id
 
       - name: country_code
+        description: "Market the listing applies to, upper-cased."
         data_tests:
           - not_null
           - relationships:
@@ -160,31 +171,33 @@ models:
               field: country_code
 
       - name: currency_code
+        description: "Currency of the listing prices, upper-cased."
         data_tests:
           - not_null
           - accepted_values:
               values: ['EUR', 'GBP', 'CHF', 'PLN']
 
       - name: recommended_retail_price_local
-        description: Original MSRP in local currency, gross of tax.
+        description: "Original MSRP in local currency, gross of tax."
         data_tests:
           - not_null
           - dbt_utils.expression_is_true:
               expression: "> 0"
 
       - name: current_listing_price_local
-        description: Active selling price in local currency, gross of tax.
+        description: "Active selling price in local currency, gross of tax."
         data_tests:
           - not_null
           - dbt_utils.expression_is_true:
               expression: "> 0"
 
       - name: is_active
+        description: "Whether the listing is active on the storefront."
         data_tests:
           - not_null
 
       - name: last_modified_at
-        description: Used as the updated_at timestamp for the snapshot.
+        description: "When the listing was last changed at the source. Used as the updated_at timestamp for the snapshot."
         data_tests:
           - not_null
 
@@ -202,23 +215,26 @@ models:
 
     columns:
       - name: rate_date
+        description: "Date the ECB published the rate."
         data_tests:
           - not_null
 
       - name: source_currency_code
+        description: "Base currency of the rate. Always EUR."
         data_tests:
           - not_null
           - accepted_values:
               values: ['EUR']
 
       - name: target_currency_code
+        description: "Currency the rate converts to (GBP, CHF or PLN)."
         data_tests:
           - not_null
           - accepted_values:
               values: ['GBP', 'CHF', 'PLN']
 
       - name: exchange_rate
-        description: Units of target currency per 1 EUR.
+        description: "Units of target currency per 1 EUR."
         data_tests:
           - not_null
           - dbt_utils.expression_is_true:
@@ -241,23 +257,24 @@ models:
 
     columns:
       - name: country_code
-        description: Master list of markets. Other models test against this column.
+        description: "Master list of markets. Other models test against this column."
         data_tests:
           - not_null
 
       - name: tax_category
-        description: Lower-cased category, matches products.category.
+        description: "Lower-cased category, matches products.category."
         data_tests:
           - not_null
 
       - name: vat_rate_pct
-        description: Rate as a fraction, e.g. 0.19 for 19%.
+        description: "Rate as a fraction, e.g. 0.19 for 19%."
         data_tests:
           - not_null
 
       - name: valid_from
+        description: "First day the rule applies, inclusive."
         data_tests:
           - not_null
 
       - name: valid_to
-        description: Last valid day, inclusive. NULL means the rule is still active.
+        description: "Last valid day, inclusive. NULL means the rule is still active."

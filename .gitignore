@@ -6,3 +6,6 @@ __pycache__/
 .user.yml
 profiles.yml
 .env
+airflow/.env
+airflow/logs/
+bi/.env

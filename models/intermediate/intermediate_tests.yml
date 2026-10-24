@@ -3,8 +3,11 @@ version: 2
 models:
   - name: int_finance__exchange_rates_daily
     description: >
-      Gapless daily EUR exchange rates per currency. Missing days are filled by
-      carrying forward the last published rate.
+      Gapless daily EUR exchange rates, one row per calendar day and currency.
+      Starts at the first published ECB rate and runs to the later of the last
+      published rate and the last order date. Days with no published rate (weekends,
+      holidays) carry forward the most recent earlier rate, per currency. Rates are
+      units of foreign currency per 1 EUR. EUR itself has no rows.
     data_tests:
       - dbt_utils.unique_combination_of_columns:
           name: one_rate_per_currency_and_day
@@ -17,6 +20,7 @@ models:
 
     columns:
       - name: rate_date
+        description: "Calendar date, including weekends and holidays."
         data_tests:
           - not_null
           - dbt_utils.sequential_values:
@@ -26,6 +30,7 @@ models:
               group_by_columns: [currency_code]
 
       - name: currency_code
+        description: "Foreign currency the rate converts from EUR (GBP, CHF or PLN)."
         data_tests:
           - not_null
           - relationships:
@@ -33,21 +38,24 @@ models:
               field: target_currency_code
 
       - name: exchange_rate
+        description: "Units of this currency per 1 EUR on this date. Carried forward when no rate was published that day."
         data_tests:
           - not_null
           - dbt_utils.expression_is_true:
               expression: "> 0"
 
       - name: source_rate_date
+        description: "Date the rate was actually published by the ECB. Equals rate_date on publication days."
         data_tests:
           - not_null
 
       - name: is_carried_forward
+        description: "True when rate_date had no published rate and an earlier rate was used."
         data_tests:
           - not_null
 
       - name: days_since_source_rate
-        description: Staleness of the rate in days. A long Easter weekend is about 4.
+        description: "Staleness of the rate in days (rate_date minus source_rate_date). A long Easter weekend is about 4."
         data_tests:
           - not_null
           - dbt_utils.expression_is_true:
@@ -61,8 +69,10 @@ models:
 
   - name: int_orders__order_items_eur
     description: >
-      Order lines converted to EUR using the daily rate for the order date.
-      EUR lines use rate 1.0. Amounts are gross (tax-inclusive) and before discounts.
+      Order lines converted to EUR using the daily rate for the order date (UTC).
+      EUR lines use rate 1.0. A non-EUR line with no rate keeps a NULL rate and NULL
+      EUR amounts instead of defaulting to 1.0. Amounts are gross (tax-inclusive) and
+      before discounts. Grain: one row per order_item_id.
     data_tests:
       - dbt_utils.expression_is_true:
           name: eur_lines_use_rate_one
@@ -76,16 +86,18 @@ models:
 
     columns:
       - name: order_item_id
+        description: "Primary key, one per order line."
         data_tests:
           - unique
           - not_null
 
       - name: order_id
+        description: "Order the line belongs to. Not unique, since an order can have several lines."
         data_tests:
           - not_null
 
       - name: product_id
-        description: May not exist in the catalog (known orphans).
+        description: "Product sold. May not exist in the catalog (known orphans)."
         data_tests:
           - not_null
           - relationships:
@@ -95,36 +107,61 @@ models:
                 severity: warn
 
       - name: customer_country_code
+        description: "Customer's country (DE, UK, CH or PL). Used to choose the VAT rate downstream."
         data_tests:
           - not_null
 
       - name: currency_code
+        description: "Currency the customer paid in (EUR, GBP, CHF or PLN)."
         data_tests:
           - not_null
 
+      - name: quantity
+        description: "Number of units on the line."
+
+      - name: unit_price_paid_local
+        description: "Price paid per unit in local currency, tax-inclusive, before any basket discount."
+
+      - name: discount_amount_local
+        description: "Prorated basket-level discount in local currency, tax-inclusive. NULL means none recorded."
+
+      - name: ordered_at
+        description: "Exact UTC timestamp of the order."
+
+      - name: ordered_date_utc
+        description: "UTC date of the order. Join key to the exchange-rate date spine."
+
       - name: exchange_rate_applied
+        description: "Units of local currency per 1 EUR used for the line. 1.0 for EUR lines. NULL when a non-EUR line had no rate."
         data_tests:
           - not_null
           - dbt_utils.expression_is_true:
               expression: "> 0"
 
+      - name: rate_source_date
+        description: "Date the ECB rate was published. NULL for EUR lines."
+
       - name: is_rate_carried_forward
+        description: "True when the order date had no published rate and the last published rate was used."
         data_tests:
           - not_null
 
       - name: gross_amount_local
+        description: "quantity x unit_price_paid_local. Line value in local currency, tax-inclusive, before discounts."
         data_tests:
           - not_null
           - dbt_utils.expression_is_true:
               expression: ">= 0"
 
       - name: gross_amount_eur
+        description: "gross_amount_local divided by exchange_rate_applied. Tax-inclusive, before discounts."
         data_tests:
           - not_null
           - dbt_utils.expression_is_true:
               expression: ">= 0"
 
       - name: discount_amount_eur
+        description: "Basket discount converted to EUR, tax-inclusive. A missing discount counts as 0."
         data_tests:
           - not_null
           - dbt_utils.expression_is_true:
@@ -132,8 +169,12 @@ models:
 
   - name: int_orders__order_items_net
     description: >
-      Net revenue per order line. Net = (gross EUR - discount EUR) / (1 + VAT rate).
-      A missing VAT rule is treated as rate 0 and flagged.
+      Net revenue per order line. Net = (gross EUR - discount EUR) / (1 + VAT rate),
+      where gross and discount are both tax-inclusive. The VAT rate is the rule valid
+      on the order date for the customer's country and the product's category. A missing
+      VAT rule is treated as rate 0 and flagged, so revenue is never dropped. This model
+      also passes through every column of int_orders__order_items_eur. Grain: one row per
+      order_item_id.
     data_tests:
       - dbt_utils.expression_is_true:
           name: net_plus_vat_equals_discounted_gross
@@ -147,13 +188,13 @@ models:
 
     columns:
       - name: order_item_id
-        description: Fan-out guard. A duplicate here means overlapping VAT windows.
+        description: "Primary key and fan-out guard. A duplicate here means overlapping VAT windows."
         data_tests:
           - unique
           - not_null
 
       - name: product_id
-        description: May not exist in the catalog (known orphans).
+        description: "Product sold. May not exist in the catalog (known orphans)."
         data_tests:
           - not_null
           - relationships:
@@ -163,19 +204,24 @@ models:
                 severity: warn
 
       - name: category
-        description: NULL for orphan products (known gap).
+        description: "Product category used as the tax category. NULL for orphan products (known gap)."
         data_tests:
           - not_null:
               config:
                 severity: warn
 
+      - name: vat_rate_pct
+        description: "VAT rate found by the time-travel join, as a fraction. NULL when no rule matched."
+
       - name: vat_rate_applied
+        description: "VAT rate actually used: vat_rate_pct, or 0 when no rule matched."
         data_tests:
           - not_null
           - dbt_utils.expression_is_true:
               expression: ">= 0"
 
       - name: is_vat_rate_missing
+        description: "True when no VAT rule matched the country, category and order date. Net revenue for these lines equals discounted gross."
         data_tests:
           - not_null
           - accepted_values:
@@ -185,18 +231,21 @@ models:
                 severity: warn
 
       - name: discounted_gross_amount_eur
+        description: "gross_amount_eur minus discount_amount_eur. What the customer paid in EUR, including VAT."
         data_tests:
           - not_null
           - dbt_utils.expression_is_true:
               expression: ">= 0"
 
       - name: net_amount_eur
+        description: "Net merchandise value in EUR: discounted_gross_amount_eur / (1 + vat_rate_applied). Excludes VAT, after discounts."
         data_tests:
           - not_null
           - dbt_utils.expression_is_true:
               expression: ">= 0"
 
       - name: vat_amount_eur
+        description: "VAT contained in discounted_gross_amount_eur. net_amount_eur + vat_amount_eur = discounted_gross_amount_eur."
         data_tests:
           - not_null
           - dbt_utils.expression_is_true:
@@ -204,8 +253,13 @@ models:
 
   - name: int_orders__order_items_pricing
     description: >
-      Historical list price, discount depth, margin and price type per order line,
-      using the snapshot version valid at order time.
+      Historical list price, discount depth, margin and price type per order line.
+      Each line is matched to the listing price version (from snap_listing_prices) valid
+      at order time, using the window [valid_from, valid_to). Orders older than the first
+      recorded version fall back to the earliest version and are flagged as a history gap.
+      Lines with no listing keep NULL list prices and the price type 'Unknown'. Output is
+      narrow (order_item_id plus pricing columns) and is joined to the other order models
+      in fct_order_items. Grain: one row per order_item_id.
     data_tests:
       - dbt_utils.expression_is_true:
           name: listing_missing_matches_null_listing_id
@@ -219,23 +273,58 @@ models:
 
     columns:
       - name: order_item_id
+        description: "Primary key, one per order line."
         data_tests:
           - unique
           - not_null
 
+      - name: listing_id
+        description: "Listing whose price version was used. NULL when the product had no listing in the customer's market."
+
+      - name: price_valid_from
+        description: "Start of the price version used. Later than the order time when is_price_history_gap is true."
+
+      - name: price_valid_to
+        description: "End (exclusive) of the price version used. NULL for the current version."
+
       - name: price_type_flag
+        description: "How the line was sold: 'Basket Discount' (takes precedence), 'Promo Price' (listing below recommended retail price), 'Full Price', or 'Unknown' (no listing and no basket discount)."
         data_tests:
           - not_null
           - accepted_values:
               values: ['Basket Discount', 'Promo Price', 'Full Price', 'Unknown']
 
+      - name: recommended_retail_price_eur
+        description: "Recommended retail price per unit in EUR, tax-inclusive, from the price version valid at order time. NULL without a listing."
+        data_tests:
+          - dbt_utils.expression_is_true:
+              expression: "> 0"
+
+      - name: list_price_eur
+        description: "Storefront listing price per unit in EUR, tax-inclusive, from the price version valid at order time. NULL without a listing."
+        data_tests:
+          - dbt_utils.expression_is_true:
+              expression: "> 0"
+
+      - name: list_price_net_line_eur
+        description: "list_price_eur x quantity with VAT removed. The line's full-price value on the same ex-VAT basis as net_amount_eur."
+
+      - name: discount_depth_eur
+        description: "list_price_net_line_eur minus net_amount_eur. How far below list price the line sold, ex-VAT, including promo pricing and basket discounts. Negative if sold above list. NULL without a listing."
+
+      - name: markdown_per_unit_eur
+        description: "Recommended retail price minus unit price paid, per unit in EUR, tax-inclusive. NULL without a listing."
+
+      - name: total_discount_given_eur
+        description: "markdown_per_unit_eur x quantity. Total markdown against recommended retail price for the line, tax-inclusive."
+
       - name: margin_eur
-        description: Net amount minus quantity times base cost (NULL cost treated as 0).
+        description: "Net amount minus quantity times base cost (NULL cost treated as 0, so margin is overstated when is_base_cost_missing is true)."
         data_tests:
           - not_null
 
       - name: is_base_cost_missing
-        description: True when margin was computed with no cost (known gap).
+        description: "True when margin was computed with no base cost (known gap). Includes products missing from the catalog."
         data_tests:
           - not_null
           - accepted_values:
@@ -245,7 +334,7 @@ models:
                 severity: warn
 
       - name: is_price_history_gap
-        description: True when the order predates the first recorded price version.
+        description: "True when the order predates the first recorded price version, so the earliest known version was used as an assumption."
         data_tests:
           - not_null
           - accepted_values:
@@ -255,15 +344,6 @@ models:
                 severity: warn
 
       - name: is_listing_missing
+        description: "True when no listing exists for the product and market."
         data_tests:
           - not_null
-
-      - name: list_price_eur
-        data_tests:
-          - dbt_utils.expression_is_true:
-              expression: "> 0"
-
-      - name: recommended_retail_price_eur
-        data_tests:
-          - dbt_utils.expression_is_true:
-              expression: "> 0"
